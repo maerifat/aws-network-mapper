@@ -18,7 +18,7 @@ getRegions() {
 #create table function
 createTable() {
     sqlite3 $dbName "CREATE TABLE  $tableName (ID INTEGER PRIMARY KEY AUTOINCREMENT, AccountId text, \
-    RegionName text, InstanceId text , State text, IpAddress text, SecurityGroups text, OpenPorts text);"
+    RegionName text, InstanceId text , State text, IpAddress text, SecurityGroups text, PortsUsed text, PortsOpen text, Services text);"
 }
 
 
@@ -34,8 +34,8 @@ fi
 
 insertTable () {
 
-    sqlite3 $dbName "INSERT INTO $tableName (AccountId , RegionName , InstanceId, State , IpAddress , SecurityGroups, OpenPorts) \
-    Values ('$accountId', '$regionName', '$instanceId', 'running', '$ip', '$sgsString', ' ' )"
+    sqlite3 $dbName "INSERT INTO $tableName (AccountId , RegionName , InstanceId, State , IpAddress , SecurityGroups, PortsUsed, PortsOpen, Services) \
+    Values ('$accountId', '$regionName', '$instanceId', 'running', '$ip', '$sgsString', '$portsToScanString' ,'$openPortsString', '$servicesString'  )"
 }
 
 fetchData(){
@@ -95,10 +95,10 @@ fetchIps(){
                     --group-ids $sgName | grep -i permission| grep -vi egress > tempsg.txt
                     while read -r line;
                     do
-                        c2=$(echo "$line"| cut -f2);
-                        c3=$(echo "$line"| cut -f3);
-                        c4=$(echo "$line"| cut -f4) ;
-                        if [ "$c3" == "-1" ];then
+                        c2=$(echo "$line"| awk '{print $2}');
+                        c3=$(echo "$line"| awk '{print $3}');
+                        c4=$(echo "$line"| awk '{print $4}') ;
+                        if [ "$c2" == "-1" ];then
                             portsToScanArray+=("1-65535")
                         fi
                         if [ "$c4" != "" ]; then
@@ -116,6 +116,25 @@ fetchIps(){
 
                 echo "$portsToScanString"
 
+                nmap "$ip" -p "$portsToScanString" -Pn --open |grep -i open > nmapresults.txt
+
+
+                openPortsArray=();
+                servicesArray=();
+                while read -r line;
+                do
+                    openPort=$(echo "$line"| awk '{print $1}'| cut -d "/" -f1);
+                    openPortsArray+=("$openPort")
+                    service=$(echo "$line"| awk '{print $3}');
+                    servicesArray+=("$service")
+                    openPortsString=$(echo "${openPortsArray[@]}" | tr ' ' ',')
+                    servicesString=$(echo "${servicesArray[@]}" | tr ' ' ',')
+
+                done < nmapresults.txt
+
+                echo $openPortsString
+                echo $servicesString
+
 
 
                insertTable
@@ -125,7 +144,7 @@ fetchIps(){
             #    echo "$accountId"
             #    echo "$instanceId"
 
-               #fetchData
+               fetchData
 
 
 

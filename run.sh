@@ -86,12 +86,13 @@ fetchIps(){
                 --profile $profileName --query 'Reservations[].Instances[?PublicIpAddress==`'$ip'`][].InstanceId' \
                 --output text)
 
+                portsToScanArray=();
+
                 for sgName in "${sgsArray[@]}";do
+
 
                     aws ec2 describe-security-groups --output text --profile $profileName --region $regionName \
                     --group-ids $sgName | grep -i permission| grep -vi egress > tempsg.txt
-
-                    portsToScanArray=();
                     while read -r line;
                     do
                         c2=$(echo "$line"| cut -f2);
@@ -109,6 +110,9 @@ fetchIps(){
                         fi
                     done < tempsg.txt
                     portsToScanString=$(echo "${portsToScanArray[@]}" | tr ' ' ',')
+                    echo "pors for $sgName : $portsToScanString"
+
+                done
 
                 echo "$portsToScanString"
 
@@ -116,12 +120,12 @@ fetchIps(){
 
                insertTable
 
-               echo "${sgsArray[@]}"
-               echo "$regionName"
-               echo "$accountId"
-               echo "$instanceId"
+            #    echo "${sgsArray[@]}"
+            #    echo "$regionName"
+            #    echo "$accountId"
+            #    echo "$instanceId"
 
-               fetchData
+               #fetchData
 
 
 

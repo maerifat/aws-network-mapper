@@ -18,7 +18,8 @@ getRegions() {
 #create table function
 createTable() {
     sqlite3 $dbName "CREATE TABLE  $tableName (ID INTEGER PRIMARY KEY AUTOINCREMENT, AccountId text, \
-    RegionName text, InstanceId text , State text, IpAddress text, SecurityGroups text, PortsUsed text, PortsOpen text, Services text);"
+    RegionName text, InstanceId text ,InstanceName text, State text, IpAddress text, SecurityGroups text, \
+    PortsUsed text, PortsOpen text, Services text);"
 }
 
 
@@ -34,8 +35,8 @@ fi
 
 insertTable () {
 
-    sqlite3 $dbName "INSERT INTO $tableName (AccountId , RegionName , InstanceId, State , IpAddress , SecurityGroups, PortsUsed, PortsOpen, Services) \
-    Values ('$accountId', '$regionName', '$instanceId', 'running', '$ip', '$sgsString', '$portsToScanString' ,'$openPortsString', '$servicesString'  )"
+    sqlite3 $dbName "INSERT INTO $tableName (AccountId , RegionName , InstanceId, InstanceName, State , IpAddress , SecurityGroups, PortsUsed, PortsOpen, Services) \
+    Values ('$accountId', '$regionName', '$instanceId', '$tagName' , 'running', '$ip', '$sgsString', '$portsToScanString' ,'$openPortsString', '$servicesString' )"
 }
 
 fetchData(){
@@ -86,6 +87,10 @@ fetchIps(){
                 --profile $profileName --query 'Reservations[].Instances[?PublicIpAddress==`'$ip'`][].InstanceId' \
                 --output text)
 
+                tagName=$(aws ec2 describe-instances --profile brightchamps \
+                --query 'Reservations[*].Instances[?PublicIpAddress==`'$ip'`][].Tags[?Key==`Name`][].Value' \
+                --output text)
+
                 portsToScanArray=();
 
                 for sgName in "${sgsArray[@]}";do
@@ -95,10 +100,10 @@ fetchIps(){
                     --group-ids $sgName | grep -i permission| grep -vi egress > tempsg.txt
                     while read -r line;
                     do
-                        c2=$(echo "$line"| awk '{print $2}');
-                        c3=$(echo "$line"| awk '{print $3}');
-                        c4=$(echo "$line"| awk '{print $4}') ;
-                        if [ "$c2" == "-1" ];then
+                    c2=$(echo "$line"| awk '{print $2}');
+                    c3=$(echo "$line"| awk '{print $3}');
+                    c4=$(echo "$line"| awk '{print $4}') ;
+                    if [ "$c2" == "-1" ];then
                             portsToScanArray+=("1-65535")
                         fi
                         if [ "$c4" != "" ]; then
@@ -147,9 +152,6 @@ fetchIps(){
                fetchData
 
 
-
-               
-
             done
 
         fi
@@ -162,9 +164,9 @@ fetchIps(){
 }
 
 
-#fetch data from NETWORKMAP table
-fetchData(){
-    sqlite3 $dbName "SELECT * FROM $tableName"
+#save data from NETWORKMAP table 
+saveData(){
+    fetchData > rawsqlite3output.txt
 }
 
 
@@ -172,5 +174,7 @@ fetchData(){
 
 
 
-fetchData
 fetchIps
+
+
+saveData

@@ -3,18 +3,13 @@
 #variables
 dbName="networks.db"
 tableName="NETWORKMAP"
-profileName="appsec-admin"
-
-
+profileName="brightchamps"
 accountId=$(aws sts get-caller-identity --profile $profileName --query "Account" --output text)
 
+#Get an array of all the regions
 getRegions() {
-
     regionArray=($(aws ec2 describe-regions --query "Regions[].RegionName" --output text))
-
 }
-
-
 
 #create table function
 createTable() {
@@ -23,8 +18,7 @@ createTable() {
     PortsUsed text, PortsOpen text, Services text);"
 }
 
-
-
+#Create new database 
 if [  -f $dbName ]; then
     echo "There is alreay database with same name, so deleting and creating new one as $dbName"
     rm -f $dbName
@@ -34,36 +28,29 @@ else
     createTable;
 fi
 
+#Insert into table function
 insertTable () {
-
     sqlite3 $dbName "INSERT INTO $tableName (AccountId , RegionName , InstanceId, InstanceName, State , IpAddress , SecurityGroups, PortsUsed, PortsOpen, Services) \
     Values ('$accountId', '$regionName', '$instanceId', '$tagName' , 'running', '$ip', '$sgsString', '$portsToScanString' ,'$openPortsString', '$servicesString' )"
 }
 
+#Fetch from table function
 fetchData(){
     sqlite3 $dbName "SELECT * FROM $tableName"
 }
 
+#Fetch Ips  and scan function
 fetchIps(){
-
-
     getRegions;
-    
 
+    #Get Ips and their instances across all the regions
     for regionName in "${regionArray[@]}";do 
-
-
-
         instancesArray=($(aws ec2 describe-instances --profile $profileName \
         --query "Reservations[].Instances[].InstanceId[]"  \
         --output text ))
-
-
         ipsArray=($(aws ec2 describe-instances --profile $profileName --region $regionName \
         --query 'Reservations[*].Instances[?State.Name==`running`].PublicIpAddress[]' \
         --output text))
-
-
         if [ -z "$ipsArray" ]; then
             echo "[+] There are no instances in $regionName region."
         else
@@ -71,32 +58,28 @@ fetchIps(){
             echo
             echo "${instancesArray[@]}"
             echo
-
             for ip in "${ipsArray[@]}";do 
-
                echo "Fetching details of $ip : "
+
+               #Security Groups
                sgsArray=($(aws ec2 describe-instances --profile $profileName \
                --query 'Reservations[*].Instances[?PublicIpAddress==`'$ip'`][].SecurityGroups[].GroupId' \
                --output text))
-
-
                 sgsString=$(echo "${sgsArray[@]}" | tr ' ' ',')
 
-
-
+                #instanceIds
                 instanceId=$(aws ec2 describe-instances \
                 --profile $profileName --query 'Reservations[].Instances[?PublicIpAddress==`'$ip'`][].InstanceId' \
                 --output text)
 
+                #Name of the instance
                 tagName=$(aws ec2 describe-instances --profile $profileName \
                 --query 'Reservations[*].Instances[?PublicIpAddress==`'$ip'`][].Tags[?Key==`Name`][].Value' \
                 --output text)
-
                 portsToScanArray=();
-
                 for sgName in "${sgsArray[@]}";do
 
-
+                    #Save Security group data in text format
                     aws ec2 describe-security-groups --output text --profile $profileName --region $regionName \
                     --group-ids $sgName | grep -i permission| grep -vi egress > tempsg.txt
                     while read -r line;
@@ -116,77 +99,61 @@ fetchIps(){
                         fi
                     done < tempsg.txt
                     portsToScanString=$(echo "${portsToScanArray[@]}" | tr ' ' ',')
-                    echo "pors for $sgName : $portsToScanString"
-
+                    echo "[+] Ports used for $sgName : $portsToScanString"
                 done
+                echo "Total Ports Used : $portsToScanString"
+                if [ "$portsToScanString" != "" ]; then 
+                    if ! grep "-" <<< "$portsToScanString" ;then 
+                        echo "[+] nmap command : nmap '$ip' -p '$portsToScanString' -Pn --open |grep -i open > nmapresults.txt"
 
-                echo "[+] Ports Used : $portsToScanString"
-
-                if ! grep "-" <<< "$portsToScanString" ;then 
-
-                   
-
-                    echo "[+] nmap command : nmap '$ip' -p '$portsToScanString' -Pn --open |grep -i open > nmapresults.txt"
-
-                    nmapCmd=$(nmap "$ip" -p "$portsToScanString" -Pn --open |grep -i open > nmapresults.txt)
-
-                    openPortsArray=();
-                    servicesArray=();
-                    while read -r line;
-                    do
-                        openPort=$(echo "$line"| awk '{print $1}'| cut -d "/" -f1);
-                        openPortsArray+=("$openPort")
-                        service=$(echo "$line"| awk '{print $3}');
-                        servicesArray+=("$service")
-                        openPortsString=$(echo "${openPortsArray[@]}" | tr ' ' ',')
-                        servicesString=$(echo "${servicesArray[@]}" | tr ' ' ',')
-
-                    done < nmapresults.txt
+                        #scan for ports used
+                        nmapCmd=$(nmap "$ip" -p "$portsToScanString" -Pn --open |grep -i open > nmapresults.txt)
+                        if [ $(wc -l nmapresults.txt |awk '{print $1}') -gt 0 ] ; then
+                            openPortsArray=();
+                            servicesArray=();
+                            while read -r line;
+                            do
+                                openPort=$(echo "$line"| awk '{print $1}'| cut -d "/" -f1);
+                                openPortsArray+=("$openPort")
+                                service=$(echo "$line"| awk '{print $3}');
+                                servicesArray+=("$service")
+                                openPortsString=$(echo "${openPortsArray[@]}" | tr ' ' ',')
+                                servicesString=$(echo "${servicesArray[@]}" | tr ' ' ',')
+                            done < nmapresults.txt
+                        else
+                            openPortsString="None"
+                            servicesString="None"
+                        fi
+                    else
+                        openPortsString="Ignored"
+                        servicesString="Ignored"
+                    fi
                 else
-                    openPortsString="Ignored"
-                    servicesString="Ignored"
+                    openPortsString="None"
+                    servicesString="None"
+                    portsToScanString="None"
                 fi
-
                 echo "[+] Open Ports : $openPortsString"
                 echo "[+] Services Running : $servicesString"
-
-
                 echo "[+] Data is being inserted into the table $tableName"
                 insertTable
-
             #    echo "${sgsArray[@]}"
             #    echo "$regionName"
             #    echo "$accountId"
             #    echo "$instanceId"
-
                 echo "[+] Fetching data from table $tableName"
                 fetchData
-
-
             done
-
         fi
-
     done
-
-   # for ip in ${ipsArray[@]};do echo $ip ;done
-
-    
+   # for ip in ${ipsArray[@]};do echo $ip ;done  
 }
-
 
 #save data from NETWORKMAP table 
 saveData(){
     fetchData > rawsqlite3output.txt
 }
-
-
-
-
-
-
 fetchIps
-
 echo "[+] We are formating data for you"
 sqlite3 $dbName "select * from $tableName" > rawdata.txt
 
@@ -291,6 +258,5 @@ print  c1 c2 c3 c4 c5 c6 c7 c8 c9 c10 c11}END \
 \
 \
 "}' > output.html
-
 echo "[+] Data has been saved in output.html"
 

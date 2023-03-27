@@ -1,182 +1,158 @@
 import boto3
-import webbrowser
+from prettytable import PrettyTable
+import os
+from datetime import datetime
 
-# create session for each environment
-sessions = {
-    'prod': boto3.session.Session(profile_name='prod'),
-    'dev': boto3.session.Session(profile_name='dev')
-}
+# set up the AWS sessions for dev and prod
+dev_session = boto3.Session(profile_name='dev')
+prod_session = boto3.Session(profile_name='prod')
 
-# iterate over sessions
-for env, session in sessions.items():
-    print(f"Environment: {env}")
-    ec2_client = session.client('ec2')
+# get the list of AWS regions
+ec2_client = dev_session.client('ec2')
+regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
 
-    # get all regions for the session
-    regions = [region['RegionName'] for region in ec2_client.describe_regions()['Regions']]
+# set up the HTML table
+table = PrettyTable(['S. No.', 'Account', 'Region', 'SecurityGroupId', 'Security Group Name', 'Protocol', 'Port Range', 'Source'])
+table.align = "l"
 
-    sg_data = []
-    # iterate over regions
+# initialize row count
+row_count = 0
+
+# iterate through the dev and prod sessions
+for session in [dev_session, prod_session]:
+    # iterate through the regions
     for region in regions:
-        print(f"Region: {region}")
-        ec2 = session.resource('ec2', region_name=region)
-
-        # get all security groups in the region
-        security_groups = ec2.security_groups.all()
-
-        # iterate over security groups
+        ec2 = session.client('ec2', region_name=region)
+        security_groups = ec2.describe_security_groups()['SecurityGroups']
+        
+        # iterate through the security groups and add to the table
         for sg in security_groups:
-            sg_id = sg.id
-            sg_name = sg.group_name
-
-            # iterate over ingress rules
-            for rule in sg.ip_permissions:
-                # get port range
-                if 'FromPort' in rule:
-                    from_port = rule['FromPort']
-                else:
-                    from_port = 'N/A'
-
-                if 'ToPort' in rule:
-                    to_port = rule['ToPort']
-                else:
-                    to_port = 'N/A'
-
-                # get protocol
-                protocol = rule['IpProtocol']
-
-                # get source
-                for source in rule['IpRanges']:
-                    source_cidr = source['CidrIp']
-
-                    # add data to list
-                    sg_data.append({
-                        'region': region,
-                        'env': env,
-                        'sg_id': sg_id,
-                        'sg_name': sg_name,
-                        'protocol': protocol,
-                        'port_range': f"{from_port}-{to_port}",
-                        'source': source_cidr
-                    })
-
-                for source in rule['UserIdGroupPairs']:
-                    source_sg_id = source.get('GroupId')
-
-                    # add data to list
-                    sg_data.append({
-                        'region': region,
-                        'env': env,
-                        'sg_id': sg_id,
-                        'sg_name': sg_name,
-                        'protocol': protocol,
-                        'port_range': f"{from_port}-{to_port}",
-                        'source': source_sg_id
-                    })
-
-                # add data to list if all traffic is allowed from any source
-                if len(rule['IpRanges']) == 1 and '0.0.0.0/0' in rule['IpRanges'][0]['CidrIp']:
-                    sg_data.append({
-                        'region': region,
-                        'env': env,
-                        'sg_id': sg_id,
-                        'sg_name': sg_name,
-                        'protocol': protocol,
-                        'port_range': f"{from_port}-{to_port}",
-                        'source': 'All Traffic'
-                    })
-
-                # check if all traffic is allowed
+            for permission in sg['IpPermissions']:
+                protocol = permission['IpProtocol']
+                if protocol == '-1':
+                    protocol = 'All Traffic'
+                for ip_range in permission.get('IpRanges', []):
+                    row_count += 1
+                    table.add_row([row_count, session.profile_name, region, sg['GroupId'], sg['GroupName'], protocol, permission.get('FromPort', ''), ip_range['CidrIp']])
+                for ipv6_range in permission.get('Ipv6Ranges', []):
+                    row_count += 1
+                    table.add_row([row_count, session.profile_name, region, sg['GroupId'], sg['GroupName'], protocol, permission.get('FromPort', ''), ipv6_range['CidrIpv6']])
+                for group_pair in permission.get('UserIdGroupPairs', []):
+                    row_count += 1
+                    table.add_row([row_count, session.profile_name, region, sg['GroupId'], sg['GroupName'], protocol, permission.get('FromPort', ''), group_pair['GroupId']])
 
 
-# generate HTML table
-html = f'''
-<html>
-<head>
-<style>
-table {{
-    font-family: arial, sans-serif;
-    border-collapse: collapse;
-    width: 100%;
-}}
+# get the HTML code for the table
+html_string = table.get_html_string(attributes={"id": "network-table"})
 
-td, th {{
-    border: 1px solid #dddddd;
-    text-align: left;
-    padding: 8px;
-}}
-
-th {{
-    background-color: #dddddd;
-}}
-
-table tr:nth-child(even) {{
-    background-color: #f2f2f2;
-}}
-
-#search {{
-    float: right;
-}}
-</style>
-</head>
+# add CSS style to the table
+html_string = """
 <body>
-<h2>Environment: {env}</h2>
-<input type="text" id="search" onkeyup="searchTable()" placeholder="Search...">
-<table id="security-table">
-<thead>
-<tr>
-<th>Region</th>
-<th>Security Group ID</th>
-<th>Security Group Name</th>
-<th>Protocol</th>
-<th>Port Range</th>
-<th>Source</th>
-</tr>
-</thead>
-<tbody>
-'''
+    <h2>AWS Security Groups</h2>
+    <div class="search-box">
+        <input type="text" id="search" onkeyup="searchTable()" placeholder="Search...">
+        <input type="button" value="Search">
+    </div>
+<body>
+ <style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }@keyframes changeColor {
+        0% {
+            color: gree;
+        }
+        16.7% {
+            color: blue;
+        }
+        33.3% {
+            color: rgb(91, 36, 180);
+        }
+        50% {
+            color: orange;
+        }
+        66.7% {
+            color: purple;
+        }
+        83.3% {
+            color: pink;
+        }
+        100% {
+            color: blue;
+        }
+    }
 
-for data in sg_data:
-    sg_link = f'https://{data["region"]}.console.aws.amazon.com/ec2/v2/home?region={data["region"]}#SecurityGroup:groupId={data["sg_id"]}'
-    html += f'<tr><td>{data["env"]}</td><td>{data["region"]}</td><td><a href="{sg_link}" target="_blank">{data["sg_id"]}</a></td><td>{data["sg_name"]}</td><td>{data["protocol"]}</td><td>{data["port_range"]}</td><td>{data["source"]}</td></tr>'
+        h2 {
+            animation: changeColor 15s ease-in-out infinite;text-align: center;
+    }
+        th{
+        background-color: #065972;
+        color: white;
+    } td {
+            text-align: left;
+            padding: 8px;
+            border: 1px solid #065972;
+        }
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+        .search-box {
+            margin-bottom: 10px;
+        }
+        .search-box input[type="text"] {
+            padding: 8px;
+            width: 100%;
+            border: 1px solid #065972;
+            border-radius: 4px;
+        }
+        .search-box input[type="button"] {
+            margin-left: 10px;
+            padding: 8px;
+            border: none;
+            background-color: #065972;
+            color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .search-box input[type="button"]:hover {
+            background-color: #44b4a6;
+        }
+        body {
+  background: linear-gradient(to bottom, #d2ffce, #a2dbfa);
+}
+    </style>
 
-html += '''
-</tbody>
-</table>
-<script>
-function searchTable() {{
-  // Declare variables
-  var input, filter, table, tr, td, i, j, txtValue;
-  input = document.getElementById("search");
-  filter = input.value.toUpperCase();
-  table = document.getElementById("security-table");
-  tr = table.getElementsByTagName("tr");
+        <script>
+        function searchTable() {
+            var input, filter, table, tr, td, i, txtValue;
+            input = document.getElementById("search");
+            filter = input.value.toUpperCase();
+            table = document.getElementById("network-table");
+            tr = table.getElementsByTagName("tr");
+            for (i = 0; i < tr.length; i++) {
+                td = tr[i].getElementsByTagName("td");
+                for (j = 0; j < td.length; j++) {
+                    txtValue = td[j].textContent || td[j].innerText;
+                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                        tr[i].style.display = "";
+                        break;
+                    } else {
+                        tr[i].style.display = "none";
+                    }
+                }
+            }
+        }
+    </script>
 
-  // Loop through all table rows, and hide those that don't match the search query
-  for (i = 0; i < tr.length; i++) {{
-    for (j = 0; j < tr[i].getElementsByTagName("td").length; j++) {{
-      td = tr[i].getElementsByTagName("td")[j];
-      if (td) {{
-        txtValue = td.textContent || td.innerText;
-        if (txtValue.toUpperCase().indexOf(filter) > -1) {{
-          tr[i].style.display = "";
-          break;
-        }} else {{
-          tr[i].style.display = "none";
-        }}
-      }}
-    }}
-  }}
-}}
-</script>
-</body>
-</html>
-'''
+""" + html_string
 
+now = datetime.now()
+dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+html_string+= f'''<footer><p>Generated by Rupifi Security Team on {dt_string} as part of the ClearSky Security Project.</p></footer>'''
 
-# write html to file
+# write the modified HTML code to an HTML file
 with open('securitygroups.html', 'w') as f:
-    f.write(html)
-
-# open file in web browser
-webbrowser.open('securitygroups.html')
+    f.write(html_string)
+    
+# open the file in the default web browser
+os.system('open securitygroups.html')

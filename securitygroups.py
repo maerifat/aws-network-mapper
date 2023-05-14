@@ -7,18 +7,18 @@ import html
 
 # set up the AWS sessions for dev and prod
 
-# prod_session = boto3.Session(profile_name='prod')
+prod_session = boto3.Session(profile_name='prod')
 security_session = boto3.Session(profile_name='sec')
-# staging_session= boto3.Session(profile_name='staging')
-# logging_session = boto3.Session(profile_name='logging')
-# infra_session = boto3.Session(profile_name='infra')
-# dev_session = boto3.Session(profile_name='dev')
-# sandbox_session = boto3.Session(profile_name='sandbox')
+staging_session= boto3.Session(profile_name='staging')
+logging_session = boto3.Session(profile_name='logging')
+infra_session = boto3.Session(profile_name='infra')
+dev_session = boto3.Session(profile_name='dev')
+sandbox_session = boto3.Session(profile_name='sandbox')
 
 # get the list of AWS regions
 #regions = prod_session.get_available_regions('ec2')
 regions = security_session.get_available_regions('ec2')
-#regions= ['af-south-1', 'ap-east-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3', 'ap-southeast-4', 'ca-central-1', 'eu-central-1', 'eu-central-2', 'eu-north-1', 'eu-south-1', 'eu-south-2', 'eu-west-1', 'eu-west-2', 'eu-west-3', 'me-central-1', 'me-south-1', 'sa-east-1', 'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2']
+regions= ['af-south-1', 'ap-east-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3', 'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2', 'ap-southeast-3', 'ap-southeast-4', 'ca-central-1', 'eu-central-1', 'eu-central-2', 'eu-north-1', 'eu-south-1', 'eu-south-2', 'eu-west-1', 'eu-west-2', 'eu-west-3', 'me-central-1', 'me-south-1', 'sa-east-1', 'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2']
 #print(regions)
 
 #regions= ['ap-south-1']
@@ -33,7 +33,7 @@ row_count = 0
 from botocore.exceptions import ClientError
 
 def find_ec2_instances(sg):
-    ec2 = session.client('ec2', region_name='ap-south-1')
+    ec2 = session.client('ec2', region_name=region)
     try:
         response = ec2.describe_instances(Filters=[
                 {'Name': 'instance.group-id', 'Values': [sg]}
@@ -44,40 +44,169 @@ def find_ec2_instances(sg):
             instances = []
             for reservation in response['Reservations']:
                 for instance in reservation['Instances']:
-                    instances.append(instance['InstanceId'])
+                    instances.append(f"ec2:{instance['InstanceId']}")
         instance_ids = ' , '.join(instances)
+        
         return instance_ids
     except ClientError as ex:
         print(ex)
 
 
 
+def find_vpn(sg):
+    try:
+        client_vpn = session.client('ec2',region_name=region)
+        response = client_vpn.describe_client_vpn_endpoints()
+        vpn_endpoints=[]
+        for endpoint in response['ClientVpnEndpoints']:
+            security_group_ids = endpoint['SecurityGroupIds']
+            if sg in security_group_ids:
+                vpn_endpoints.append(f"vpn:{endpoint['ClientVpnEndpointId']}")
+        if not vpn_endpoints:
+            vpn_endpoints=""
+        else:
+            vpn_endpoints = ' , '.join(vpn_endpoints)
+        print(vpn_endpoints)
+        return vpn_endpoints
+    except Exception as e:
+        print(e)
+
+
+
+def find_beanstalk_envs(sg):
+    try: 
+        eb_client = session.client('elasticbeanstalk',region_name=region)
+        environments = eb_client.describe_environments()['Environments']
+        beanstalk_envs=set()
+        # Loop through each environment and retrieve its security groups
+        for env in environments:
+            env_name = env['EnvironmentName']
+            env_id = env['EnvironmentId']
+            env_resources = eb_client.describe_environment_resources(EnvironmentId=env_id)['EnvironmentResources']
+            beanstalkinstances = [instance['Id'] for instance in env_resources['Instances']]
+            for beanstalkinstance in beanstalkinstances:
+                instance_ids= find_ec2_instances(sg)
+                if beanstalkinstance in instance_ids:
+                    print("yes it is there.")
+                    beanstalk_envs.add(f"ebs:env/{env_name}")
+        beanstalk_envs = ' , '.join(beanstalk_envs)
+        print(f"{sg} is in {beanstalk_envs}")
+        return beanstalk_envs
+    except Exception as e:
+        print(e)
+
+
+
+
+def find_rds(sg):
+    rds_client = session.client('rds', region_name=region)
+    # Get all RDS instances
+    response = rds_client.describe_db_instances()
+
+    # Loop through each RDS instance
+    rds_instances=[]
+    for db_instance in response['DBInstances']:
+        try:
+            print()
+            # Get the security groups associated with the RDS instance
+            security_groups = db_instance['VpcSecurityGroups']
+
+            # Print the security group IDs
+            for security_group in security_groups:
+                if sg in security_group['VpcSecurityGroupId']:
+                    rds_instances.append(f"rds:{db_instance['DBInstanceIdentifier']}")
+                else:
+                    print("rds not found")
+                #print(f"Security Group ID for RDS instance {db_instance['DBInstanceIdentifier']}: {security_group['VpcSecurityGroupId']}")
+        except Exception as e:
+            print(e)
+    if not rds_instances:
+        rds_instances=""
+    else:
+        rds_instances = ' , '.join(rds_instances)
+    return rds_instances
+
+
+
+
+def find_ecs(sg):
+    ecs_client=session.client('ecs', region_name=region)
+    # List all clusters
+    clusters = ecs_client.list_clusters()
+    # Loop through each cluster
+    ecs_services=[]
+    for cluster in clusters['clusterArns']:
+        
+        try:
+            # List all services in the cluster
+            
+            services = ecs_client.list_services(cluster=cluster)
+
+            for service in services['serviceArns']:
+                # Get the details of the service
+                response = ecs_client.describe_services(cluster=cluster, services=[service])
+                
+                security_groups = response['services'][0]['networkConfiguration']['awsvpcConfiguration']['securityGroups']
+                if sg in security_groups:
+                    ecs_services.append(f"ecs:{cluster.split(':')[-1]};service/{response['services'][0]['serviceName']}")
+
+        except:
+            print("fault in find_ecs")
+    if not ecs_services:
+        ecs_services=""
+    else:
+        ecs_services = ' , '.join(ecs_services)
+    return ecs_services
+
+
+
+def find_eks(sg):
+    eks =session.client('eks',region_name=region)
+    # List the names of all EKS clusters in the account
+    cluster_names = eks.list_clusters()['clusters']
+    eks_clusters=[]
+    # Loop through each cluster and print its security group IDs
+    for cluster_name in cluster_names:
+        try:
+            response = eks.describe_cluster(name=cluster_name)
+
+            security_group_ids = response['cluster']['resourcesVpcConfig']['securityGroupIds']
+            clusterSecurityGroupId = response['cluster']['resourcesVpcConfig']['clusterSecurityGroupId']
+            if sg in security_group_ids or sg in clusterSecurityGroupId:
+                eks_clusters.append(f"eks:cluster/{cluster_name}")
+        except Exception as e:
+            print(e)
+
+    if not eks_clusters:
+        eks_clusters=""
+    else:
+        eks_clusters = ' , '.join(eks_clusters)
+
+    return eks_clusters
 
 
 
 def find_elbs(sg):
-    elb = session.client('elbv2', region_name='ap-south-1')
+    elbv2 = session.client('elbv2', region_name=region)
     try:
-        response = elb.describe_load_balancers(Names=[], LoadBalancerArns=[], Marker='', PageSize=100)
-        if not response['LoadBalancers']:
-            elb_names = ""
+        elb_names = []
+        response = elbv2.describe_load_balancers()
+        for lb in response['LoadBalancers']:
+            try:
+                if sg in lb['SecurityGroups']:
+                    elb_names.append(f"elb:{lb['LoadBalancerName']}")
+                    print("yes, it was found in this alb")
+            except:
+                print("security group not found in this alb")
+
+        if not elb_names:
+            elb_names=""
         else:
-            elb_names = []
-            for lb in response['LoadBalancers']:
-                for sg_id in lb['SecurityGroups']:
-                    if sg_id == sg:
-                        elb_names.append(lb['LoadBalancerName'])
-        elb_names = ' , '.join(elb_names)
+            elb_names = ' , '.join(elb_names)
+        
         return elb_names
-    except ClientError as ex:
+    except Exception as ex:
         print(ex)
-
-
-
-
-
-
-
 
 
 
@@ -86,11 +215,11 @@ def find_elbs(sg):
 
 # iterate through the dev and prod sessions
 
-#for session in [ prod_session,dev_session , staging_session, infra_session,security_session,sandbox_session, logging_session ]:
-for session in [security_session]:
+#for session in [ prod_session , staging_session, sandbox_session, dev_session, infra_session, security_session, logging_session ]:
+for session in [staging_session]:
 #for session in [security_session]:
     # iterate through the regions
-    for region in regions:
+    for region in ['ap-south-1']:
         try:
             ec2 = session.client('ec2', region_name=region)
 
@@ -99,9 +228,27 @@ for session in [security_session]:
             # iterate through the security groups and add to the table
             for sg in security_groups:
                 #print(sg)
-                resources= find_ec2_instances(str(sg['GroupId']))
+                resources =[]
+                ec2_resources= find_ec2_instances(str(sg['GroupId']))
+                rds_resources= find_rds(str(sg['GroupId']))
+                elb_resources= find_elbs(str(sg['GroupId']))
+                ecs_resources= find_ecs(str(sg['GroupId']))
+                eks_resources= find_eks(str(sg['GroupId']))
+                vpn_resources= find_vpn(str(sg['GroupId']))
+                bs_resources = find_beanstalk_envs(str(sg['GroupId']))
+                resources.append(ec2_resources)
+                resources.append(rds_resources)
+                resources.append(elb_resources)
+                resources.append(ecs_resources)
+                resources.append(eks_resources)
+                resources.append(bs_resources)
+                resources.append(vpn_resources)
+
+                while('' in resources):
+                    resources.remove('')
+                resources = ' , '.join(map(str, resources))
+
                 print(f"this is my {resources}")
-                resource="abc"
                 for permission in sg['IpPermissions']:
                     protocol = permission['IpProtocol']
                     if protocol == '-1':

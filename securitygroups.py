@@ -64,7 +64,7 @@ def find_vpn(sg):
                 vpn_endpoints.append(f"vpn:{endpoint['ClientVpnEndpointId']}")
     except Exception as e:
         print(e)
-        
+
     if not vpn_endpoints:
         vpn_endpoints=""
     else:
@@ -216,7 +216,33 @@ def find_codebuild(sg):
 
 
 
+def find_ecache(sg):
+    # Create a session using your AWS credentials
+    ecache_clusters = set()
+    try:
+    # Create an ElastiCache client using the session
+        ecache_client = session.client('elasticache', region_name=region)
 
+        # Retrieve a list of ElastiCache clusters
+        response = ecache_client.describe_cache_clusters()
+
+        # Loop through each cluster and check if the security group is attached
+        ecache_clusters = set()
+        for cluster in response['CacheClusters']:
+            cluster_id = cluster['CacheClusterId']
+            security_groups = cluster['SecurityGroups']
+            for group in security_groups:
+                group_id = group['SecurityGroupId']
+                if group_id == sg:
+                    ecache_clusters.add(f"ecache:cluster/{cluster_id}")
+                    break
+    except Exception as e:
+        print(f"Error message: {e}")
+    if not ecache_clusters:
+        ecache_clusters=""
+    else:
+        ecache_clusters = ' , '.join(ecache_clusters)
+    return ecache_clusters
 
 
 def find_elbs(sg):
@@ -251,7 +277,7 @@ def find_elbs(sg):
 # iterate through the dev and prod sessions
 
 for session in [ prod_session , staging_session, sandbox_session, dev_session, infra_session, security_session, logging_session ]:
-#for session in [staging_session]:
+#for session in [prod_session]:
 #for session in [security_session]:
     # iterate through the regions
     for region in regions:
@@ -272,6 +298,7 @@ for session in [ prod_session , staging_session, sandbox_session, dev_session, i
                 vpn_resources= find_vpn(str(sg['GroupId']))
                 bs_resources = find_beanstalk_envs(str(sg['GroupId']))
                 cb_resources = find_codebuild(str(sg['GroupId']))
+                ecache_resources= find_ecache(str(sg['GroupId']))
                 resources.append(ec2_resources)
                 resources.append(rds_resources)
                 resources.append(elb_resources)
@@ -280,6 +307,7 @@ for session in [ prod_session , staging_session, sandbox_session, dev_session, i
                 resources.append(bs_resources)
                 resources.append(vpn_resources)
                 resources.append(cb_resources)
+                resources.append(ecache_resources)
 
                 while('' in resources):
                     resources.remove('')
